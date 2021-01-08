@@ -7,7 +7,8 @@ Contact: adalca@csail.mit.edu
 import numpy as np
 from . import ndutils as nd
 
-def seg2contour(seg, exclude_zero=True, contour_type='inner', thickness=1):
+
+def seg2contour(seg, exclude_zero=True, contour_type='inner', thickness=1, method='sdt'):
     '''
     transform nd segmentation (label maps) to contour maps
 
@@ -45,13 +46,13 @@ def seg2contour(seg, exclude_zero=True, contour_type='inner', thickness=1):
 
         # extract contour map for this label
         thickness = thickness + 0.01
-        label_contour_map = nd.bw2contour(label_map, type=contour_type, thr=thickness)
+        label_contour_map = nd.bw2contour(label_map, type=contour_type, thr=thickness, 
+                                          method=method)
 
         # assign contour to this label
         contour_map[label_contour_map] = lab
 
     return contour_map
-
 
 
 def seg_overlap(vol, seg, do_contour=True, do_rgb=True, cmap=None, thickness=1.0):
@@ -113,10 +114,9 @@ def seg_overlay(vol, seg, do_rgb=True, seg_wt=0.5, cmap=None):
         seg_rgb = np.reshape(seg_flat, vol.shape + (3, ))
 
         # get the overlap image
-        olap = seg_rgb * seg_wt + np.expand_dims(vol, -1) * (1-seg_wt)
+        olap = seg_rgb * seg_wt + np.expand_dims(vol, -1) * (1 - seg_wt)
 
     else:
-        olap = seg * seg_wt + vol * (1-seg_wt)
+        olap = seg * seg_wt + vol * (1 - seg_wt)
 
     return olap
-

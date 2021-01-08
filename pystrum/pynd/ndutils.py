@@ -5,12 +5,14 @@ Tested on Python 3.5
 Contact: adalca@csail.mit.edu
 """
 
-import builtins, sys
+import builtins
+import sys
 
 import numpy as np
 import scipy as sp
 import scipy.ndimage
 from scipy.spatial import ConvexHull
+from scipy.ndimage.filters import convolve
 
 
 def boundingbox(bwvol):
@@ -104,6 +106,43 @@ def bw2sdtrf(bwvol):
     return posdst * notbwvol - negdst * bwvol
 
 
+def bw2boundary(bwvol, thickness=1):
+    """
+    computes the boundary between the binary True/False elements of logical bwvol
+
+    Parameters
+    ----------
+    bwvol : nd array
+        The logical volume
+
+    Returns
+    -------
+    sdtrf : nd array
+        the signed distance transform
+
+    See Also
+    --------
+    bwdist
+    """
+
+    # create a second-order difference filter kernel from Pascal's triangle
+    if np.round(thickness) == 1:
+        kern = np.array([-1, +2, -1]).reshape([3] + [1] * (bwvol.ndim - 1))
+    elif np.round(thickness) == 2:
+        kern = np.array([+1, -4, +6, -4, +1]).reshape([5] + [1] * (bwvol.ndim - 1))
+    elif np.round(thickness) == 3:
+        kern = np.array([-1, +6, -15, +20, -15, +6, -1]).reshape([7] + [1] * (bwvol.ndim - 1))
+    else:
+        assert np.round(thickness) in [1, 2, 3], 'thickness should be between 1 and 3'
+    # mark boundaries
+    conv = np.zeros_like(bwvol)
+    for i in range(0, bwvol.ndim):
+        filt = np.swapaxes(kern, 0, i)
+        conv = conv + np.abs(convolve(bwvol, filt))
+
+    return conv > 0
+
+
 bw_to_sdtrf = bw2sdtrf
 
 
@@ -124,16 +163,15 @@ def bw_grid(vol_shape, spacing, thickness=1):
     # check inputs
     if not isinstance(spacing, (list, tuple)):
         spacing = [spacing] * len(vol_shape)
-    spacing = [f+1 for f in spacing]
+    spacing = [f + 1 for f in spacing]
     assert len(vol_shape) == len(spacing)
-
 
     # go through axes
     grid_image = np.zeros(vol_shape)
     for d, v in enumerate(vol_shape):
         rng = [np.arange(0, f) for f in vol_shape]
         for t in range(thickness):
-            rng[d] = np.append(np.arange(0+t, v, spacing[d]), -1)
+            rng[d] = np.append(np.arange(0 + t, v, spacing[d]), -1)
             grid_image[ndgrid(*rng)] = 1
 
     return grid_image
@@ -147,7 +185,7 @@ def bw_convex_hull(bwvol):
     return np.concatenate([grid[d].flat for d in bwvol.ndims], 1)
 
 
-def bw2contour(bwvol, type='both', thr=1.01):
+def bw2contour(bwvol, type='both', thr=1.01, method='sdt'):
     """
     computes the contour of island(s) on a nd logical volume
 
@@ -170,16 +208,29 @@ def bw2contour(bwvol, type='both', thr=1.01):
     bwdist, bw2dstrf
     """
 
-    # obtain a signed distance transform for the bw volume
-    sdtrf = bw2sdtrf(bwvol)
+    if method == 'sdt':
+        # obtain a signed distance transform for the bw volume
+        sdtrf = bw2sdtrf(bwvol)
+        if type == 'inner':
+            return np.logical_and(sdtrf <= 0, sdtrf > -thr)
+        elif type == 'outer':
+            return np.logical_and(sdtrf >= 0, sdtrf < thr)
+        else:
+            assert type == 'both', 'type should only be inner, outer or both'
+            return np.abs(sdtrf) < thr
 
-    if type == 'inner':
-        return np.logical_and(sdtrf <= 0, sdtrf > -thr)
-    elif type == 'outer':
-        return np.logical_and(sdtrf >= 0, sdtrf < thr)
+    elif method == 'conv':
+        # obtain boundaries
+        sdtrf = bw2boundary(bwvol, thr)
+        if type == 'inner':
+            return np.logical_and(sdtrf, bwvol - 0)
+        elif type == 'outer':
+            return np.logical_and(sdtrf, 1 - bwvol)
+        else:
+            assert type == 'both', 'type should only be inner, outer or both'
+            return sdtrf
     else:
-        assert type == 'both', 'type should only be inner, outer or both'
-        return np.abs(sdtrf) < thr
+        assert method in ['sdt', 'conv'], 'method must be either sdt or conv'
 
 
 bw_to_contour = bw2contour
@@ -192,10 +243,9 @@ def bw_sphere(volshape, rad, loc=None):
 
     # if the location is not given, use the center of the volume.
     if loc is None:
-        loc = 1.0 * (np.array(volshape)-1) / 2
+        loc = 1.0 * (np.array(volshape) - 1) / 2
     assert len(loc) == len(volshape), \
         'Location (%d) and volume dimensions (%d) do not match' % (len(loc), len(volshape))
-
 
     # compute distances between each location in the volume and ``loc``
     volgrid = volsize2ndgrid(volshape)
@@ -227,7 +277,9 @@ def volsize2ndgrid(volsize):
     ranges = [np.arange(e) for e in volsize]
     return ndgrid(*ranges)
 
+
 volsize_to_ndgrid = volsize2ndgrid
+
 
 def volcrop(vol, new_vol_shape=None, start=None, end=None, crop=None):
     """
@@ -281,7 +333,7 @@ def volcrop(vol, new_vol_shape=None, start=None, end=None, crop=None):
                 "When giving passed_new_vol_shape, cannot pass both start and end"
             start = end - new_vol_shape
 
-        else: # none of crop_size, crop, start or end are passed
+        else:  # none of crop_size, crop, start or end are passed
             mid = np.asarray(vol_shape) // 2
             start = mid - (np.asarray(new_vol_shape) // 2)
             end = start + new_vol_shape
@@ -289,7 +341,7 @@ def volcrop(vol, new_vol_shape=None, start=None, end=None, crop=None):
     elif passed_crop:
         assert not (passed_start or passed_end or new_vol_shape), \
             "Cannot pass both passed_crop and start or end or new_vol_shape"
-        
+
         if isinstance(crop[0], (list, tuple)):
             end = vol_shape - [val[1] for val in crop]
             start = [val[0] for val in crop]
@@ -297,7 +349,7 @@ def volcrop(vol, new_vol_shape=None, start=None, end=None, crop=None):
             end = vol_shape - crop
             start = crop
 
-    elif passed_start: # nothing else is passed
+    elif passed_start:  # nothing else is passed
         end = vol_shape
 
     else:
@@ -319,7 +371,8 @@ def volcrop(vol, new_vol_shape=None, start=None, end=None, crop=None):
     elif len(start) == 4:
         rvol = vol[start[0]:end[0], start[1]:end[1], start[2]:end[2], start[3]:end[3]]
     elif len(start) == 5:
-        rvol = vol[start[0]:end[0], start[1]:end[1], start[2]:end[2], start[3]:end[3], start[4]:end[4]]
+        rvol = vol[start[0]:end[0], start[1]:end[1], start[2]:end[2],
+                   start[3]:end[3], start[4]:end[4]]
     else:
         idx = range(start, end)
         rvol = vol[np.ix_(*idx)]
@@ -469,7 +522,7 @@ def gaussian_kernel(sigma, windowsize=None, indexing='ij'):
     Parameters:
         sigma: scalar or list of scalars
         windowsize (optional): scalar or list of scalars indicating the shape of the kernel
-    
+
     Returns:
         ND kernel the same dimensiosn as the number of sigmas.
     """
@@ -491,15 +544,15 @@ def gaussian_kernel(sigma, windowsize=None, indexing='ij'):
     assert indexing == 'ij', 'Only ij indexing implemented so far'
 
     # ok, let's get to work.
-    mid = [(w - 1)/2 for w in windowsize]
+    mid = [(w - 1) / 2 for w in windowsize]
 
     # list of volume ndgrid
     # N-long list, each entry of shape volshape
-    mesh = volsize2ndgrid(windowsize)  
+    mesh = volsize2ndgrid(windowsize)
 
     # compute independent gaussians
     diff = [mesh[f] - mid[f] for f in range(len(windowsize))]
-    exp_term = [- np.square(diff[f])/(2 * (sigma[f]**2)) for f in range(nb_dims)]
+    exp_term = [- np.square(diff[f]) / (2 * (sigma[f]**2)) for f in range(nb_dims)]
     norms = [exp_term[f] - np.log(sigma[f] * np.sqrt(2 * np.pi)) for f in range(nb_dims)]
 
     # add an all-ones entry and transform into a large matrix
@@ -516,12 +569,12 @@ def perlin_vol(vol_shape, min_scale=0, max_scale=None, interp_order=1, wt_type='
     generate perlin noise ND volume 
 
     rough algorithm:
-    
+
     vol = zeros
     for scale in scales:
         rand = generate random uniform noise at given scale
         vol += wt * upsampled rand to vol_shape 
-        
+
 
     Parameters
     ----------
@@ -533,14 +586,14 @@ def perlin_vol(vol_shape, min_scale=0, max_scale=None, interp_order=1, wt_type='
     interp_order: interpolation (upscale) order, as used in scipy.ndimage.interpolate.zoom
     wt_type: the weight type between volumes. default: monotonically decreasing with image size.
       options: 'monotonic', 'random'
-    
+
     https://github.com/adalca/matlib/blob/master/matlib/visual/perlin.m
     loosely inspired from http://nullprogram.com/blog/2007/11/20
     """
 
     # input handling
     assert wt_type in ['monotonic', 'random'], \
-        "wt_type should be in 'monotonic', 'random', got: %s"  % wt_type
+        "wt_type should be in 'monotonic', 'random', got: %s" % wt_type
 
     if max_scale is None:
         max_width = np.max(vol_shape)
@@ -551,14 +604,13 @@ def perlin_vol(vol_shape, min_scale=0, max_scale=None, interp_order=1, wt_type='
     wts = []
     for i in range(min_scale, max_scale + 1):
         scale_shapes.append(np.ceil([f / (2**i) for f in vol_shape]).astype('int'))
-    
+
         # determine weight
         if wt_type == 'monotonic':
             wts.append(i + 1)  # larger images (so more high frequencies) get lower weight
         else:
             wts.append(np.random.random())
-    wts = np.array(wts)/np.sum(wts)
-
+    wts = np.array(wts) / np.sum(wts)
 
     # get perlin volume
     vol = np.zeros(vol_shape)
@@ -566,15 +618,61 @@ def perlin_vol(vol_shape, min_scale=0, max_scale=None, interp_order=1, wt_type='
 
         # get a small random volume
         rand_vol = np.random.random(sc)
-        
+
         # interpolated rand volume to upper side
-        reshape_factor = [vol_shape[d]/sc[d] for d in range(len(vol_shape))]
+        reshape_factor = [vol_shape[d] / sc[d] for d in range(len(vol_shape))]
         interp_vol = scipy.ndimage.interpolation.zoom(rand_vol, reshape_factor, order=interp_order)
 
         # add to existing volume
         vol = vol + wts[sci] * interp_vol
-        
+
     return vol
+
+
+def sphere_vol(vol_shape, radius, center=None, dtype=np.bool):
+    """
+    draw nd sphere volume
+
+    Args:
+        vol_shape (list): volume shape, a list of integers
+        center (list or int): list or integer, if list then same length as vol_shape list
+        radius (float): radius of the circle
+        dtype (np.dtype): np.bool (binary sphere) or np.float32 (sphere with partial volume at edge)
+
+    Returns:
+        [tf.bool or tf.float32]: bw sphere, either 0/1 (if bool) or [0,1] if float32
+    """
+
+    # prepare inputs
+    assert isinstance(vol_shape, (list, tuple)), 'vol_shape needs to be a list or tuple'
+    ndims = len(vol_shape)
+
+    if not isinstance(center, (list, tuple)):
+        if center is None:
+            center = [(f - 1) / 2 for f in vol_shape]
+        else:
+            center = [center] * ndims
+    else:
+        assert len(center) == ndims, "center list length does not match vol_shape length"
+
+    # check dtype
+    assert dtype in [np.bool, np.float32], 'dtype should be np.bool, np.float32'
+
+    # prepare mesh
+    mesh = volsize2ndgrid(vol_shape)
+    centered_mesh = [(mesh[f] - center[f])**2 for f in range(ndims)]
+    dist_from_center = np.sqrt(np.sum(np.stack(centered_mesh, ndims), ndims))
+
+    # create sphere
+    sphere = dist_from_center <= radius
+    if dtype == np.float32:  # enable partial volume at edge
+        float_sphere = sphere.astype(np.float32)
+        df = radius - dist_from_center
+        edge = np.logical_and(df < 0, df > -1)
+        sphere = float_sphere + edge * (1 + df)
+
+    # done!
+    return sphere
 
 
 ###############################################################################
