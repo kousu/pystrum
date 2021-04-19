@@ -7,6 +7,8 @@ Contact: adalca@csail.mit.edu
 
 import builtins
 import sys
+import re
+from ast import literal_eval
 
 import numpy as np
 import scipy as sp
@@ -675,9 +677,34 @@ def sphere_vol(vol_shape, radius, center=None, dtype=np.bool):
     return sphere
 
 
+def printed_numpy_to_array(string):
+    '''
+    transform a printed numpy array (string) to a numpy array
+
+    Example:
+    printed_array = """[[0.74268087, 0.23098959, 0.24466867, 0.69201753],
+       [0.09907753, 0.1472794 , 0.57733857, 0.35489757],
+       [0.91808391, 0.51522785, 0.86230898, 0.06236136]]
+       """
+    my_array = printed_numpy_to_array(printed_array)
+
+    '''
+    string = string.replace(',', ' ')
+    res = re.sub(r"([^[])\s+([^]])", r"\1, \2", string)
+    return np.array(literal_eval(res))
+
+
+def printed_file_to_array(file):
+    '''
+    read file of printed numpy array (string) to numpy array
+    '''
+    with open(file, 'r') as file:
+        return printed_numpy_to_array(file.read())
+
 ###############################################################################
 # internal
 ###############################################################################
+
 
 def _prep_range(*args):
     """
